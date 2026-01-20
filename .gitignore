@@ -1,0 +1,46 @@
+# Compiled object files
+*.o
+
+# Compiled binaries
+lb_sim
+bin/
+build/
+dist/
+
+# Logs and runtime files
+*.log
+*.out
+*.pid
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+env/
+
+# Editor/IDE
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# macOS files
+.DS_Store
+
+# Temporary files
+*~
+*.swp
+
+# Coverage and testing
+.pytest_cache/
+.coverage
+coverage.xml
+
+# Doxygen output
+docs/
+
+# Web generated metrics (optional)
+web/metrics.json

@@ -1,0 +1,17 @@
+# Doxyfile generated for the load-balancer project (minimal sensible defaults)
+
+PROJECT_NAME           = "Load Balancer Simulation"
+OUTPUT_DIRECTORY       = docs
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+HTML_OUTPUT            = html
+
+INPUT                  = include src
+RECURSIVE              = YES
+FILE_PATTERNS          = *.h *.cpp
+EXTRACT_ALL            = YES
+QUIET                  = NO
+GENERATE_TREEVIEW      = YES
+
+# Treat comments in C++ files
+OPTIMIZE_OUTPUT_FOR_C  = NO

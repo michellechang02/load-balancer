@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Load Balancer Metrics</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 16px; }
+    #controls { margin-bottom:12px }
+    #charts { display:flex; gap:16px; flex-wrap:wrap }
+    canvas { background:#fff; border:1px solid #ccc }
+    .panel { flex:1 1 480px }
+    pre { max-height:300px; overflow:auto; background:#f8f8f8; padding:8px }
+  </style>
+</head>
+<body>
+  <h1>Load Balancer Metrics</h1>
+
+  <div id="controls">
+    <button id="reload">Reload</button>
+    <label style="margin-left:8px"><input type="checkbox" id="autorefresh"> Auto-refresh</label>
+    <button id="resetZoom" style="margin-left:8px">Reset Zoom</button>
+    <span id="summary" style="margin-left:16px;font-weight:600"></span>
+    <span id="liveBadge" style="margin-left:12px;color:green;font-weight:700;display:none">LIVE</span>
+  </div>
+
+  <div id="charts">
+    <div class="panel">
+      <h3>Queued Requests (over time)</h3>
+      <canvas id="queued" width="700" height="300"></canvas>
+    </div>
+    <div class="panel">
+      <h3>Active Servers (over time)</h3>
+      <canvas id="servers" width="700" height="300"></canvas>
+    </div>
+  </div>
+
+  <h3>Events</h3>
+  <div style="display:flex;gap:16px">
+    <div style="flex:1"><h4>Assignments</h4><pre id="assigns"></pre></div>
+    <div style="flex:1"><h4>Scaling</h4><pre id="scales"></pre></div>
+  </div>
+
+  <!-- Chart.js + zoom plugin from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@1.2.1/dist/chartjs-plugin-zoom.min.js"></script>
+  <script>
+  let queuedChart = null, serversChart = null, metricsCache = [];
+
+  function buildDatasets(metrics) {
+    const labels = metrics.map(m => m.t);
+    const queued = metrics.map(m => m.queued);
+    const servers = metrics.map(m => m.servers);
+    return { labels, queued, servers };
+  }
+
+  function buildOrUpdateCharts(metrics) {
+    const ctxQ = document.getElementById('queued').getContext('2d');
+    const ctxS = document.getElementById('servers').getContext('2d');
+    const data = buildDatasets(metrics);
+    const commonOptions = {
+      responsive: true,
+      plugins: {
+        zoom: { pan: { enabled: true, mode: 'x' }, zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x' } }
+      },
+      scales: { x: { title: { display: true, text: 'Cycle' } } }
+    };
+    if (!queuedChart) {
+      queuedChart = new Chart(ctxQ, {
+        type: 'line',
+        data: { labels: data.labels, datasets: [{ label: 'Queued', data: data.queued, borderColor: '#c43', backgroundColor: 'rgba(196,67,67,0.12)', fill: true }] },
+        options: commonOptions
+      });
+    } else {
+      queuedChart.data.labels = data.labels;
+      queuedChart.data.datasets[0].data = data.queued;
+      queuedChart.update();
+    }
+    if (!serversChart) {
+      serversChart = new Chart(ctxS, {
+        type: 'line',
+        data: { labels: data.labels, datasets: [{ label: 'Servers', data: data.servers, borderColor: '#27a', backgroundColor: 'rgba(39,122,170,0.12)', fill: true }] },
+        options: commonOptions
+      });
+    } else {
+      serversChart.data.labels = data.labels;
+      serversChart.data.datasets[0].data = data.servers;
+      serversChart.update();
+    }
+  }
+
+  function updateSummary(metrics) {
+    if (!metrics || !metrics.length) { document.getElementById('summary').textContent = ''; return; }
+    const last = metrics[metrics.length-1];
+    const maxQueued = Math.max(...metrics.map(m=>m.queued));
+    const avgServers = (metrics.reduce((s,m)=>s+m.servers,0)/metrics.length).toFixed(2);
+    document.getElementById('summary').textContent = `t=${last.t} queued=${last.queued} maxQueued=${maxQueued} avgServers=${avgServers}`;
+  }
+
+  function handleIncomingData(obj) {
+    // merge incoming metrics (append); keep assigns and scales
+    if (obj.metrics && obj.metrics.length) {
+      // simple merge assuming increasing t
+      metricsCache = (metricsCache || []).concat(obj.metrics || []);
+      buildOrUpdateCharts(metricsCache);
+      updateSummary(metricsCache);
+    }
+    if (obj.assigns) document.getElementById('assigns').textContent = JSON.stringify(obj.assigns, null, 2);
+    if (obj.scales) document.getElementById('scales').textContent = JSON.stringify(obj.scales, null, 2);
+  }
+
+  let sseConnected = false;
+  let staticLoaded = false;
+
+  async function loadAndRender() {
+    // initial attempt to load static metrics.json for historical data
+    try {
+      const resp = await fetch('metrics.json');
+      if (resp.ok) {
+        const data = await resp.json();
+        staticLoaded = true;
+        // hide static instruction when we have static data
+        const instr = document.getElementById('static-instruction'); if (instr) instr.style.display = 'none';
+        metricsCache = data.metrics || [];
+        buildOrUpdateCharts(metricsCache);
+        document.getElementById('assigns').textContent = JSON.stringify(data.assigns || [], null, 2);
+        document.getElementById('scales').textContent = JSON.stringify(data.scales || [], null, 2);
+        updateSummary(metricsCache);
+      }
+    } catch (e) {
+      // ignore — SSE will provide live updates
+      console.debug('No static metrics.json or failed to load (ok if running live):', e);
+    }
+  }
+
+  document.getElementById('reload').addEventListener('click', loadAndRender);
+  document.getElementById('resetZoom').addEventListener('click', () => { if (queuedChart) queuedChart.resetZoom(); if (serversChart) serversChart.resetZoom(); });
+  document.getElementById('autorefresh').addEventListener('change', (e) => {
+    if (e.target.checked) {
+      window._refreshInterval = setInterval(loadAndRender, 2000);
+    } else {
+      clearInterval(window._refreshInterval);
+    }
+  });
+
+  // initial load (static) and start SSE for live updates
+  loadAndRender();
+
+  // SSE connection to receive incremental updates from /events
+  if (!!window.EventSource) {
+    const es = new EventSource('/events');
+    es.onopen = () => {
+      console.log('SSE open');
+      sseConnected = true;
+      // hide static instruction and show LIVE badge
+      const instr = document.getElementById('static-instruction'); if (instr) instr.style.display = 'none';
+      const badge = document.getElementById('liveBadge'); if (badge) badge.style.display = 'inline';
+    };
+    es.onerror = (e) => console.warn('SSE error', e);
+    es.onmessage = (ev) => {
+      try {
+        const obj = JSON.parse(ev.data);
+        // the server sends full metrics state initially; handle incrementally
+        handleIncomingData(obj);
+      } catch (err) {
+        console.error('Failed to parse SSE message', err);
+      }
+    };
+  } else {
+    console.warn('EventSource not supported; live updates disabled');
+  }
+
+  // if neither SSE nor static metrics.json arrive within 1.5s, show the instruction
+  setTimeout(() => {
+    const instr = document.getElementById('static-instruction');
+    if (!sseConnected && !staticLoaded && instr) instr.style.display = 'block';
+  }, 1500);
+  </script>
+</body>
+</html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Load Balancer Metrics</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 16px; }
+    #charts { display:flex; gap:16px; flex-wrap:wrap }
+    canvas { background:#fff; border:1px solid #ccc }
+    .panel { flex:1 1 480px }
+    pre { max-height:300px; overflow:auto; background:#f8f8f8; padding:8px }
+  </style>
+</head>
+<body>
+
+  <script>
+  async function load() {
+    try {
+      const resp = await fetch('metrics.json');
+      const data = await resp.json();
+      const metrics = data.metrics || [];
+      const assigns = data.assigns || [];
+      const scales = data.scales || [];
+      draw(metrics);
+      document.getElementById('assigns').textContent = JSON.stringify(assigns, null, 2);
+      document.getElementById('scales').textContent = JSON.stringify(scales, null, 2);
+    } catch (e) {
+      document.body.insertAdjacentHTML('beforeend', '<p style="color:red">Error loading metrics.json: '+e+'</p>');
+    }
+  }
+
+  function draw(metrics) {
+    if (!metrics.length) return;
+    const t0 = metrics[0].t;
+    const t1 = metrics[metrics.length-1].t;
+    const queued = metrics.map(m=>m.queued);
+    const servers = metrics.map(m=>m.servers);
+    drawLine('queued', queued, 'Queued Requests');
+    drawLine('servers', servers, 'Active Servers');
+  }
+
+  function drawLine(canvasId, arr, label) {
+    const c = document.getElementById(canvasId);
+    const ctx = c.getContext('2d');
+    ctx.clearRect(0,0,c.width,c.height);
+    const w = c.width, h = c.height, pad = 30;
+    const maxv = Math.max(...arr);
+    const minv = Math.min(...arr);
+    ctx.strokeStyle = '#0077cc'; ctx.lineWidth = 2; ctx.beginPath();
+    for (let i=0;i<arr.length;i++){
+      const x = pad + (i/(arr.length-1))*(w-2*pad);
+      const y = h - pad - ((arr[i]-minv)/(maxv-minv||1))*(h-2*pad);
+      if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+    // axes
+    ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pad, pad); ctx.lineTo(pad, h-pad); ctx.lineTo(w-pad, h-pad); ctx.stroke();
+    ctx.fillStyle='#000'; ctx.fillText(label, pad, 12);
+  }
+
+  load();
+  </script>
+</body>
+</html>
