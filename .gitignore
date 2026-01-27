@@ -1,3 +1,10 @@
+# Ignore generated docs build output
+/docs/html/
+
+# Build artifacts
+/lb_sim
+/test_runner
+/smoke_output.txt
 # Compiled object files
 *.o
 

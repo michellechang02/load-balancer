@@ -19,5 +19,9 @@ $(TARGET): $(OBJS)
 run: $(TARGET)
 	./$(TARGET)
 
+test: 
+	$(CXX) $(CXXFLAGS) -o test_runner tests/test_basic.cpp src/loadbalancer.cpp src/webserver.cpp src/request.cpp
+	./test_runner
+
 clean:
 	rm -f $(OBJS) $(TARGET)
