@@ -29,7 +29,7 @@ public:
      * @param initialServers Number of servers to start with.
      * @param rngSeed Optional RNG seed (0 = nondeterministic seed from device).
      */
-    LoadBalancer(int initialServers, unsigned rngSeed = 0);
+    LoadBalancer(int initialServers, unsigned rngSeed = 0, bool quiet = false, bool json = false);
 
     /**
      * @brief Fill the initial queue to capacity (servers * 5 requests).
@@ -50,6 +50,10 @@ public:
      * @param totalCycles Number of cycles to run the simulation.
      */
     void run(double totalCycles);
+
+    // Accessors useful for tests
+    int serverCount() const;
+    size_t queuedCount() const;
 
 private:
     /**
@@ -99,6 +103,10 @@ private:
     uint64_t nextRequestId_;
     double nextArrivalTime_;
     double now_;
+
+    // Output control
+    bool quiet_;
+    bool json_;
 };
 
 #endif // LOADBALANCER_H
