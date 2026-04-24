@@ -17,6 +17,8 @@
 #include <vector>
 #include <random>
 #include <string>
+#include <mutex>
+#include <thread>
 
 /**
  * @brief Controller for the load balancer simulation.
@@ -92,6 +94,10 @@ private:
 
     std::queue<Request> requestQueue_;
     std::vector<WebServer> servers_;
+
+    // Synchronization
+    mutable std::mutex queueMutex_;  ///< Protects requestQueue_
+    std::mutex outputMutex_;         ///< Serializes console output from worker threads
 
     // Random generators
     std::mt19937 rng_;

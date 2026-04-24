@@ -1,6 +1,6 @@
 
 CXX := g++
-CXXFLAGS := -std=c++17 -O2 -Wall -Wextra -I include
+CXXFLAGS := -std=c++17 -O2 -Wall -Wextra -I include -pthread
 
 SRCS := src/main.cpp src/loadbalancer.cpp src/webserver.cpp src/request.cpp
 OBJS := $(SRCS:.cpp=.o)
