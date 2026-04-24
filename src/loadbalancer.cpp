@@ -43,13 +43,17 @@ void LoadBalancer::maybeAddNewRequest(double now) {
         r.serviceCycles = serviceDist_(rng_);
         r.ip_in = std::to_string(octetDist_(rng_)) + "." + std::to_string(octetDist_(rng_)) + "." + std::to_string(octetDist_(rng_)) + "." + std::to_string(octetDist_(rng_));
         r.ip_out = std::to_string(octetDist_(rng_)) + "." + std::to_string(octetDist_(rng_)) + "." + std::to_string(octetDist_(rng_)) + "." + std::to_string(octetDist_(rng_));
-        requestQueue_.push(r);
+        {
+            std::lock_guard<std::mutex> qLock(queueMutex_);
+            requestQueue_.push(r);
+        }
         int nextDelta = std::max(1, static_cast<int>(std::ceil(interArrival_(rng_))));
         nextArrivalTime_ = now + nextDelta;
     }
 }
 
 void LoadBalancer::distribute() {
+    std::lock_guard<std::mutex> qLock(queueMutex_);
     for (auto &s : servers_) {
         if (!s.isBusy() && !requestQueue_.empty()) {
             Request r = requestQueue_.front();
@@ -68,7 +72,12 @@ void LoadBalancer::distribute() {
 }
 
 void LoadBalancer::scaleServers() {
-    double queuePerServer = servers_.empty() ? (double)requestQueue_.size() : (double)requestQueue_.size() / servers_.size();
+    size_t qSize;
+    {
+        std::lock_guard<std::mutex> qLock(queueMutex_);
+        qSize = requestQueue_.size();
+    }
+    double queuePerServer = servers_.empty() ? (double)qSize : (double)qSize / servers_.size();
     if (queuePerServer > 4.0) {
         int newid = (int)servers_.size() + 1;
         servers_.emplace_back(newid);
@@ -92,15 +101,28 @@ void LoadBalancer::step(double dt) {
     now_ += dt;
     maybeAddNewRequest(now_);
     distribute();
-    for (auto &s : servers_) {
-        bool finished = s.tick();
-        if (finished) {
-            if (!quiet_) {
-                if (json_) std::cout << "{\"event\":\"done\",\"server\":" << s.getId() << ",\"t\":" << now_ << "}\n";
-                else std::cout << "[done] server=" << s.getId() << " at t=" << now_ << "\n";
+
+    // Tick all servers concurrently; each server is independent so no
+    // per-server mutex is required – the threads never share a WebServer.
+    // Capture the current time by value so threads don't race on now_.
+    const double tickNow = now_;
+    std::vector<std::thread> threads;
+    threads.reserve(servers_.size());
+    for (size_t i = 0; i < servers_.size(); ++i) {
+        threads.emplace_back([i, &srv = servers_[i], tickNow, this]() {
+            bool finished = srv.tick();
+            if (finished && !quiet_) {
+                std::lock_guard<std::mutex> outLock(outputMutex_);
+                if (json_) {
+                    std::cout << "{\"event\":\"done\",\"server\":" << srv.getId() << ",\"t\":" << tickNow << "}\n";
+                } else {
+                    std::cout << "[done] server=" << srv.getId() << " at t=" << tickNow << "\n";
+                }
             }
-        }
+        });
     }
+    for (auto &t : threads) t.join();
+
     if (static_cast<int>(now_ * 10) % 10 == 0) {
         scaleServers();
     }
@@ -122,4 +144,7 @@ void LoadBalancer::run(double totalSeconds) {
 
 int LoadBalancer::serverCount() const { return static_cast<int>(servers_.size()); }
 
-size_t LoadBalancer::queuedCount() const { return requestQueue_.size(); }
+size_t LoadBalancer::queuedCount() const {
+    std::lock_guard<std::mutex> qLock(queueMutex_);
+    return requestQueue_.size();
+}
